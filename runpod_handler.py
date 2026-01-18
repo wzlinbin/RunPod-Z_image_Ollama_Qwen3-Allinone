@@ -1,37 +1,40 @@
 import runpod, requests, time, os, base64
 
+# 服务地址定义
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 COMFY_URL = "http://127.0.0.1:8188"
 VISION_MODEL = "huihui_ai/qwen3-vl-abliterated"
 
 def handler(job):
-    job_input = job["input"]
+    job_input = job.get("input", {})
     
-    # --- 逻辑 A: Qwen3-VL 视觉分析 (含你提供的顶级 Prompt) ---
+    # --- 模式 A: 视觉逆向分析 (接收图片上传) ---
     if "image" in job_input:
         payload = {
             "model": VISION_MODEL,
-            "prompt": job_input.get("prompt", "请对图像进行全维度逆向解析。"),
+            "prompt": job_input.get("prompt", ""),
             "stream": False,
             "images": [job_input["image"]],
             "options": {
-                "num_gpu": 99, 
-                "num_ctx": 8192,
-                "temperature": 0.4
+                "num_ctx": 8192, 
+                "temperature": 0.4,
+                "num_gpu": 99 # 显式引导强制 GPU 分配
             }
         }
         try:
             res = requests.post(OLLAMA_URL, json=payload, timeout=300)
+            res.raise_for_status()
             return {"status": "success", "type": "vision", "content": res.json().get("response")}
         except Exception as e:
-            return {"status": "error", "message": f"Ollama 失败: {str(e)}"}
+            return {"status": "error", "message": f"Ollama GPU 调度失败: {str(e)}"}
 
-    # --- 逻辑 B: ComfyUI Z-Image-Turbo 画图 ---
+    # --- 模式 B: ComfyUI 绘图测试 (依照参考信息 3) ---
     else:
         prompt_text = job_input.get("prompt", "a beautiful girl")
         output_dir = "/comfyui/output"
         old_files = set(os.listdir(output_dir)) if os.path.exists(output_dir) else set()
 
+        # 严格执行 z-image-turbo 官方工作流
         workflow = {
             "39": {"inputs": {"clip_name": "qwen_3_4b.safetensors", "type": "lumina2", "device": "default"}, "class_type": "CLIPLoader"},
             "40": {"inputs": {"vae_name": "ae.safetensors"}, "class_type": "VAELoader"},
@@ -47,7 +50,10 @@ def handler(job):
 
         try:
             res = requests.post(f"{COMFY_URL}/prompt", json={"prompt": workflow})
+            res.raise_for_status()
             prompt_id = res.json().get("prompt_id")
+            
+            # 等待任务完成 (参考信息 3)
             for _ in range(150):
                 history_res = requests.get(f"{COMFY_URL}/history/{prompt_id}").json()
                 if prompt_id in history_res: break
@@ -58,9 +64,9 @@ def handler(job):
                 target = sorted([f for f in new_files if f.startswith("z-image")])[-1]
                 with open(os.path.join(output_dir, target), "rb") as f:
                     return {"status": "success", "type": "generation", "image": base64.b64encode(f.read()).decode("utf-8")}
-            return {"status": "error", "message": "No output files."}
+            return {"status": "error", "message": "No output files found."}
         except Exception as e:
-            return {"error": str(e)}
+            return {"status": "error", "message": f"ComfyUI GPU 调度失败: {str(e)}"}
 
 if __name__ == "__main__":
     runpod.serverless.start({"handler": handler})
