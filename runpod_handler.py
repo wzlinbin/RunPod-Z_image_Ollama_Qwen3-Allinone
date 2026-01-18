@@ -1,6 +1,5 @@
 import runpod, requests, time, os, base64
 
-# 服务地址定义 (复刻昨日)
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 COMFY_URL = "http://127.0.0.1:8188"
 VISION_MODEL = "huihui_ai/qwen3-vl-abliterated"
@@ -8,7 +7,6 @@ VISION_MODEL = "huihui_ai/qwen3-vl-abliterated"
 def handler(job):
     job_input = job.get("input", {})
     
-    # --- 模式 A: 视觉分析 (如果有图片) ---
     if "image" in job_input:
         payload = {
             "model": VISION_MODEL,
@@ -16,9 +14,9 @@ def handler(job):
             "stream": False,
             "images": [job_input["image"]],
             "options": {
-                "num_ctx": 8192, 
+                "num_ctx": 4096, 
                 "temperature": 0.4,
-                "num_gpu": 99 # 确保强制加载到 GPU
+                "num_gpu": 37  # <--- 修正为 37 层，解决 500 报错的关键
             }
         }
         try:
@@ -28,8 +26,8 @@ def handler(job):
         except Exception as e:
             return {"status": "error", "message": f"Ollama GPU 失败: {str(e)}"}
 
-    # --- 模式 B: 画图测试 (参考信息 3) ---
     else:
+        # 生图逻辑保持不变
         prompt_text = job_input.get("prompt", "a beautiful girl")
         output_dir = "/comfyui/output"
         old_files = set(os.listdir(output_dir)) if os.path.exists(output_dir) else set()
@@ -60,7 +58,7 @@ def handler(job):
                 target = sorted([f for f in new_files if f.startswith("z-image")])[-1]
                 with open(os.path.join(output_dir, target), "rb") as f:
                     return {"status": "success", "type": "generation", "image": base64.b64encode(f.read()).decode("utf-8")}
-            return {"status": "error", "message": "No output files."}
+            return {"status": "error", "message": "No output files found."}
         except Exception as e:
             return {"status": "error", "message": f"ComfyUI GPU 失败: {str(e)}"}
 
